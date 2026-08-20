@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { MessageSquare, Plus, Trash2, Menu, X, Send, Paperclip, FileText, Loader2, Bot, User, BookOpen, Sun, Moon } from "lucide-react";
+import { MessageSquare, Plus, Trash2, Menu, X, Send, Paperclip, FileText, Loader2, Bot, User, BookOpen, Sun, Moon, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -50,6 +50,7 @@ export default function ChatPage() {
   const [ragEnabled, setRagEnabled] = useState(true);
   const [documents, setDocuments] = useState<KnowledgeDoc[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [kbExpanded, setKbExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -513,61 +514,74 @@ export default function ChatPage() {
 
         {/* Knowledge Base Bar */}
         {ragEnabled && currentSessionId && (
-          <div className="border-t border-border px-4 py-3">
-            <div className="max-w-3xl mx-auto">
-              <div className="flex items-center gap-2 mb-2">
-                <label className="cursor-pointer">
-                  <input
-                    type="file"
-                    className="sr-only"
-                    accept=".pdf,.txt,.csv,.doc,.docx"
-                    multiple
-                    onChange={(e) => {
-                      Array.from(e.target.files || []).forEach(handleFileUpload);
-                      e.target.value = "";
-                    }}
-                  />
-                  <div className="w-8 h-8 border-2 border-dashed border-border rounded-lg flex items-center justify-center hover:border-primary/50 transition-colors">
-                    {isUploading ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    ) : (
-                      <Plus className="h-4 w-4 text-muted-foreground" />
-                    )}
-                  </div>
-                </label>
-                <span className="text-xs text-muted-foreground">Add documents to knowledge base</span>
-              </div>
+          <div className="border-t border-border">
+            <button
+              onClick={() => setKbExpanded(!kbExpanded)}
+              className="w-full flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground hover:bg-accent/50 transition-colors"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              <span className="flex-1 text-left">Knowledge Base ({documents.length} file{documents.length !== 1 ? "s" : ""})</span>
+              {kbExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+            </button>
 
-              {documents.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {documents.map((doc) => (
-                    <Badge
-                      key={doc.id}
-                      variant="outline"
-                      className={`text-xs ${
-                        doc.status === "failed" ? "border-destructive text-destructive" : ""
-                      }`}
-                    >
-                      <FileText className="h-3 w-3 mr-1" />
-                      {doc.filename}
-                      {doc.status === "processing" && (
-                        <Loader2 className="h-3 w-3 ml-1 animate-spin" />
-                      )}
-                      {doc.status === "indexed" && <span className="ml-1">({doc.chunk_count})</span>}
-                      {doc.status === "failed" && (
-                        <span className="ml-1 text-destructive">{doc.error_msg}</span>
-                      )}
-                      <button
-                        onClick={() => deleteDocument(doc.id)}
-                        className="ml-1 hover:text-destructive"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
+            {kbExpanded && (
+              <div className="px-4 pb-3 max-h-40 overflow-y-auto">
+                <div className="max-w-3xl mx-auto">
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="cursor-pointer">
+                      <input
+                        type="file"
+                        className="sr-only"
+                        accept=".pdf,.txt,.csv,.doc,.docx"
+                        multiple
+                        onChange={(e) => {
+                          Array.from(e.target.files || []).forEach(handleFileUpload);
+                          e.target.value = "";
+                        }}
+                      />
+                      <div className="w-8 h-8 border-2 border-dashed border-border rounded-lg flex items-center justify-center hover:border-primary/50 transition-colors">
+                        {isUploading ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        ) : (
+                          <Plus className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </div>
+                    </label>
+                    <span className="text-xs text-muted-foreground">Add documents</span>
+                  </div>
+
+                  {documents.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {documents.map((doc) => (
+                        <Badge
+                          key={doc.id}
+                          variant="outline"
+                          className={`text-xs ${
+                            doc.status === "failed" ? "border-destructive text-destructive" : ""
+                          }`}
+                        >
+                          <FileText className="h-3 w-3 mr-1" />
+                          {doc.filename}
+                          {doc.status === "processing" && (
+                            <Loader2 className="h-3 w-3 ml-1 animate-spin" />
+                          )}
+                          {doc.status === "indexed" && <span className="ml-1">({doc.chunk_count})</span>}
+                          {doc.status === "failed" && (
+                            <span className="ml-1 text-destructive">{doc.error_msg}</span>
+                          )}
+                          <button
+                            onClick={() => deleteDocument(doc.id)}
+                            className="ml-1 hover:text-destructive"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
 
