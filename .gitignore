@@ -3,3 +3,8 @@ node_modules/
 .next/
 out/
 .DS_Store
+backend/uploads/
+backend/dist/
+backend/test-db.js
+backend/migrate.js
+Watheeq Codebase/
