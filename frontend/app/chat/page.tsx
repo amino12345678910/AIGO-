@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { MessageSquare, Plus, Trash2, Menu, X, Send, Paperclip, FileText, Loader2, Bot, User, BookOpen, Sun, Moon, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,8 @@ import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
+import { MermaidDiagram } from "../components/mermaid";
+import { InteractiveQuiz } from "../components/interactive-quiz";
 import { useTheme } from "next-themes";
 
 const API_URL = "http://localhost:5000";
@@ -22,6 +24,8 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   chunksUsed?: number[];
+  attachment?: string;
+  attachmentPreview?: string;
 }
 
 interface ChatSession {
@@ -41,6 +45,7 @@ interface KnowledgeDoc {
 
 export default function ChatPage() {
   const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -51,8 +56,40 @@ export default function ChatPage() {
   const [documents, setDocuments] = useState<KnowledgeDoc[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [kbExpanded, setKbExpanded] = useState(false);
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedPreview, setAttachedPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const patienceWords = useMemo(() => [
+    "Thinking...",
+    "Reading your material...",
+    "Processing...",
+    "Connecting ideas...",
+    "Almost there...",
+    "Analyzing...",
+    "Putting it together...",
+    "Working on it...",
+    "One moment...",
+    "Let me think...",
+  ], []);
+  const [loadingText, setLoadingText] = useState(patienceWords[0]);
+  const [showCursor, setShowCursor] = useState(false);
+  const lastMsgCountRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    setLoadingText(patienceWords[0]);
+    let i = 0;
+    const interval = setInterval(() => {
+      i = (i + 1) % patienceWords.length;
+      setLoadingText(patienceWords[i]);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [isLoading, patienceWords]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -61,6 +98,17 @@ export default function ChatPage() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  useEffect(() => {
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.role === "assistant" && messages.length > lastMsgCountRef.current) {
+      setShowCursor(true);
+      const timer = setTimeout(() => setShowCursor(false), 1200);
+      lastMsgCountRef.current = messages.length;
+      return () => clearTimeout(timer);
+    }
+    lastMsgCountRef.current = messages.length;
+  }, [messages]);
 
   useEffect(() => {
     fetchSessions();
@@ -139,8 +187,12 @@ export default function ChatPage() {
     if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
+    const fileToSend = attachedFile;
+    const previewToSend = attachedPreview;
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+    setAttachedFile(null);
+    setAttachedPreview(null);
+    setMessages((prev) => [...prev, { role: "user", content: userMessage, ...(fileToSend ? { attachment: fileToSend.name, ...(fileToSend.type.startsWith("image/") && previewToSend ? { attachmentPreview: previewToSend } : {}) } : {}) }]);
     setIsLoading(true);
 
     let sessionId = currentSessionId;
@@ -165,10 +217,16 @@ export default function ChatPage() {
     }
 
     try {
+      const formData = new FormData();
+      formData.append("content", userMessage);
+      formData.append("ragEnabled", String(ragEnabled));
+      if (fileToSend) {
+        formData.append("file", fileToSend);
+      }
+
       const response = await fetch(`${API_URL}/api/session/${sessionId}/message`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: userMessage, ragEnabled }),
+        body: formData,
       });
 
       if (!response.ok) throw new Error("Failed to send message");
@@ -357,9 +415,9 @@ export default function ChatPage() {
                 className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-accent hover:text-accent-foreground"
                 onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               >
-                {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                {mounted && (theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />)}
               </TooltipTrigger>
-              <TooltipContent>{theme === "dark" ? "Light mode" : "Dark mode"}</TooltipContent>
+                <TooltipContent>{mounted && (theme === "dark" ? "Light mode" : "Dark mode")}</TooltipContent>
             </Tooltip>
             <label className="flex items-center gap-2 cursor-pointer">
               <span className="text-xs text-muted-foreground">RAG</span>
@@ -416,7 +474,9 @@ export default function ChatPage() {
                 <div className={`flex gap-3 max-w-[80%] ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
                   <div
                     className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                      msg.role === "user" ? "bg-primary" : "bg-primary/10"
+                      msg.role === "user"
+                        ? "bg-gradient-to-br from-primary to-primary/70"
+                        : "bg-gradient-to-br from-primary/20 to-primary/5 ring-1 ring-primary/10"
                     }`}
                   >
                     {msg.role === "user" ? (
@@ -426,10 +486,10 @@ export default function ChatPage() {
                     )}
                   </div>
                   <div
-                    className={`rounded-lg px-4 py-2 ${
+                    className={`rounded-2xl px-4 py-2.5 animate-fade-in-up ${
                       msg.role === "user"
-                        ? "bg-primary text-primary-foreground rounded-end-sm"
-                        : "bg-muted text-foreground rounded-end-sm"
+                        ? "bg-gradient-to-br from-primary to-primary/90 text-primary-foreground rounded-br-md"
+                        : "bg-muted/60 backdrop-blur-sm text-foreground rounded-bl-md ring-1 ring-border/50"
                     }`}
                   >
                     {msg.role === "assistant" ? (
@@ -457,6 +517,14 @@ export default function ChatPage() {
                               if (isInline) {
                                 return <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">{children}</code>;
                               }
+                              if (className?.includes("language-mermaid")) {
+                                const chart = String(children || "").replace(/\n$/, "");
+                                return <MermaidDiagram chart={chart} />;
+                              }
+                              if (className?.includes("language-quiz")) {
+                                const quizData = String(children || "").replace(/\n$/, "");
+                                return <InteractiveQuiz chart={quizData} />;
+                              }
                               return <code className={className} {...props}>{children}</code>;
                             },
                             ul: ({ children }) => <ul className="list-disc pl-5 my-1 space-y-0.5">{children}</ul>,
@@ -477,9 +545,23 @@ export default function ChatPage() {
                         >
                           {msg.content}
                         </ReactMarkdown>
+                        {showCursor && i === messages.length - 1 && (
+                          <span className="inline-block w-[2px] h-4 bg-primary/70 ml-0.5 -mb-0.5 cursor-blink" />
+                        )}
                       </div>
                     ) : (
-                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      <>
+                        {msg.attachmentPreview && (
+                          <img src={msg.attachmentPreview} alt="" className="max-h-32 rounded-md mb-1.5 object-cover" />
+                        )}
+                        {msg.attachment && (
+                          <div className="flex items-center gap-1 text-xs opacity-70 mb-1">
+                            <Paperclip className="h-3 w-3" />
+                            <span>{msg.attachment}</span>
+                          </div>
+                        )}
+                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      </>
                     )}
                     {msg.chunksUsed && msg.chunksUsed.length > 0 && (
                       <p className="text-xs mt-2 opacity-60 flex items-center gap-1">
@@ -492,16 +574,19 @@ export default function ChatPage() {
             ))}
 
             {isLoading && (
-              <div className="flex justify-start">
+              <div className="flex justify-start animate-fade-in-up">
                 <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center ring-1 ring-primary/10">
                     <Bot className="h-4 w-4 text-primary" />
                   </div>
-                  <div className="bg-muted rounded-lg px-4 py-2 rounded-end-sm">
-                    <div className="flex gap-1">
-                      <div className="w-2 h-2 bg-muted-foreground/40 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                      <div className="w-2 h-2 bg-muted-foreground/40 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                      <div className="w-2 h-2 bg-muted-foreground/40 rounded-full animate-bounce" />
+                  <div className="bg-muted/60 backdrop-blur-sm rounded-2xl px-4 py-3 rounded-bl-md ring-1 ring-border/50">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex gap-[3px]">
+                        <div className="w-[5px] h-[5px] bg-primary/50 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                        <div className="w-[5px] h-[5px] bg-primary/50 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                        <div className="w-[5px] h-[5px] bg-primary/50 rounded-full animate-bounce" />
+                      </div>
+                      <span className="text-xs text-muted-foreground shimmer">{loadingText}</span>
                     </div>
                   </div>
                 </div>
@@ -532,7 +617,7 @@ export default function ChatPage() {
                       <input
                         type="file"
                         className="sr-only"
-                        accept=".pdf,.txt,.csv,.doc,.docx"
+                        accept=".pdf,.txt,.csv,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp"
                         multiple
                         onChange={(e) => {
                           Array.from(e.target.files || []).forEach(handleFileUpload);
@@ -587,19 +672,76 @@ export default function ChatPage() {
 
         {/* Input Area */}
         <div className="border-t border-border p-4">
-          <div className="max-w-3xl mx-auto flex gap-2">
-            <Input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask a question..."
-              disabled={isLoading}
-              className="flex-1"
-            />
-            <Button onClick={sendMessage} disabled={isLoading || !input.trim()} size="icon">
-              <Send className="h-4 w-4" />
-            </Button>
+          <div className="max-w-3xl mx-auto">
+            {attachedFile && (
+              <div className="flex items-center gap-2 mb-2 px-1">
+                {attachedPreview ? (
+                  <div className="relative group">
+                    <img src={attachedPreview} alt="" className="h-16 w-16 object-cover rounded-md border border-border" />
+                    <button
+                      onClick={() => { setAttachedFile(null); setAttachedPreview(null); }}
+                      className="absolute -top-1.5 -right-1.5 h-5 w-5 bg-background border border-border rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 bg-muted rounded-md px-2.5 py-1 text-xs">
+                    <FileText className="h-3 w-3 text-muted-foreground" />
+                    <span className="max-w-[200px] truncate">{attachedFile.name}</span>
+                    <span className="text-muted-foreground">({(attachedFile.size / 1024).toFixed(0)} KB)</span>
+                    <button
+                      onClick={() => { setAttachedFile(null); setAttachedPreview(null); }}
+                      className="ml-1 hover:text-destructive transition-colors"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.txt,.docx,.png,.jpg,.jpeg,.gif,.webp"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    setAttachedFile(file);
+                    if (file.type.startsWith("image/")) {
+                      const url = URL.createObjectURL(file);
+                      setAttachedPreview(url);
+                    } else {
+                      setAttachedPreview(null);
+                    }
+                  }
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading}
+                className="h-10 w-10 flex-shrink-0"
+              >
+                <Paperclip className="h-4 w-4" />
+              </Button>
+              <Input
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask a question..."
+                disabled={isLoading}
+                className="flex-1"
+              />
+              <Button onClick={sendMessage} disabled={isLoading || !input.trim()} size="icon">
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
       </div>

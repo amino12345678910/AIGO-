@@ -1,4 +1,4 @@
-import type { Metadata } from "react";
+import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { TooltipProvider } from "@/components/ui/tooltip";

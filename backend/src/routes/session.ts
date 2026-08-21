@@ -1,9 +1,32 @@
 import { Router, Request, Response } from "express";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 import { pool } from "../db/supabase";
 import { handleUserMessage } from "../services/orchestrator";
+import { extractText } from "../services/textExtractor";
 import { log, error } from "../utils/logger";
 
 const router = Router();
+
+const CHAT_UPLOADS_DIR = path.resolve(__dirname, "../../uploads/chat");
+fs.mkdirSync(CHAT_UPLOADS_DIR, { recursive: true });
+
+const chatUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, CHAT_UPLOADS_DIR),
+    filename: (_req, file, cb) => {
+      const unique = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+      cb(null, `${unique}${path.extname(file.originalname)}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = [".pdf", ".txt", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".webp"];
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, allowed.includes(ext));
+  },
+});
 
 router.post("/start", async (req: Request, res: Response) => {
   try {
@@ -63,11 +86,11 @@ router.get("/:id", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/:id/message", async (req: Request, res: Response) => {
+router.post("/:id/message", chatUpload.single("file"), async (req: Request, res: Response) => {
   try {
     const id = parseInt(String(req.params.id));
     const content = String(req.body?.content || "");
-    const ragEnabled = req.body?.ragEnabled !== false;
+    const ragEnabled = req.body?.ragEnabled !== "false";
 
     if (!content.trim()) {
       res.status(400).json({ error: "Message content is required" });
@@ -83,6 +106,32 @@ router.post("/:id/message", async (req: Request, res: Response) => {
       return;
     }
 
+    let attachmentContext: { fileName: string; text: string } | undefined;
+    let attachmentImage: { mimeType: string; data: string } | undefined;
+    let attachmentFileName: string | null = null;
+
+    if (req.file) {
+      attachmentFileName = req.file.originalname;
+      const ext = path.extname(req.file.originalname).slice(1).toLowerCase();
+      const isImage = ["png", "jpg", "jpeg", "gif", "webp"].includes(ext);
+      const IMAGE_MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+
+      try {
+        if (isImage) {
+          const buffer = fs.readFileSync(req.file.path);
+          attachmentImage = { mimeType: IMAGE_MIME[ext] || "image/png", data: buffer.toString("base64") };
+          attachmentContext = { fileName: req.file.originalname, text: `[Image attached: ${req.file.originalname}]` };
+        } else {
+          const text = await extractText(req.file.path, ext);
+          attachmentContext = { fileName: req.file.originalname, text: text.slice(0, 15000) };
+        }
+      } catch (err) {
+        error("Failed to process attachment", err);
+      } finally {
+        fs.unlink(req.file.path, () => {});
+      }
+    }
+
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -92,7 +141,13 @@ router.post("/:id/message", async (req: Request, res: Response) => {
       `data: ${JSON.stringify({ type: "user_message", content })}\n\n`
     );
 
-    const result = await handleUserMessage(id, content.trim(), ragEnabled);
+    const result = await handleUserMessage(id, content.trim(), ragEnabled, attachmentContext, attachmentImage);
+
+    await pool.query(
+      `UPDATE chat_messages SET has_attachment = $1, attachment_url = $2
+       WHERE session_id = $3 AND role = 'user' AND content = $4`,
+      [!!attachmentFileName, attachmentFileName, id, content.trim()]
+    );
 
     res.write(
       `data: ${JSON.stringify({
@@ -106,6 +161,7 @@ router.post("/:id/message", async (req: Request, res: Response) => {
     res.end();
   } catch (err) {
     error("Failed to process message", err);
+    if (req.file) fs.unlink(req.file.path, () => {});
     if (!res.headersSent) {
       res.status(500).json({ error: "Failed to process message" });
     } else {
